@@ -182,6 +182,7 @@ class AutoregressiveRationalQuadraticSpline(Flow):
         num_input_channels,
         num_blocks,
         num_hidden_channels,
+        context_features=None,
         num_bins=8,
         tail_bound=3,
         activation=nn.ReLU,
@@ -207,7 +208,7 @@ class AutoregressiveRationalQuadraticSpline(Flow):
         self.mprqat = MaskedPiecewiseRationalQuadraticAutoregressive(
             features=num_input_channels,
             hidden_features=num_hidden_channels,
-            context_features=None,
+            context_features=context_features,
             num_bins=num_bins,
             tails="linear",
             tail_bound=tail_bound,
@@ -221,12 +222,12 @@ class AutoregressiveRationalQuadraticSpline(Flow):
             init_identity=init_identity,
         )
 
-    def forward(self, z):
-        z, log_det = self.mprqat.inverse(z)
+    def forward(self, z, context=None):
+        z, log_det = self.mprqat.inverse(z, context)
         return z, log_det.view(-1)
 
-    def inverse(self, z):
-        z, log_det = self.mprqat(z)
+    def inverse(self, z, context=None):
+        z, log_det = self.mprqat(z, context)
         return z, log_det.view(-1)
 
 
