@@ -31,3 +31,15 @@ from .neural_spline import (
 )
 
 from .stochastic import MetropolisHastings, HamiltonianMonteCarlo
+
+from . import (
+    base,
+    mixing,
+    normalization,
+    periodic,
+    planar,
+    radial,
+    reshape,
+    residual,
+    stochastic,
+)

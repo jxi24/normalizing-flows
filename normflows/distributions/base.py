@@ -59,6 +59,7 @@ class DiagGaussian(BaseDistribution):
 
         Args:
           shape: Tuple with shape of data, if int shape has one dimension
+          trainable: Flag whether to use trainable or fixed parameters
         """
         super().__init__()
         if isinstance(shape, int):
@@ -76,7 +77,7 @@ class DiagGaussian(BaseDistribution):
             self.register_buffer("log_scale", torch.zeros(1, *self.shape))
         self.temperature = None  # Temperature parameter for annealed sampling
 
-    def forward(self, num_samples=1):
+    def forward(self, num_samples=1, context=None):
         eps = torch.randn(
             (num_samples,) + self.shape, dtype=self.loc.dtype, device=self.loc.device
         )
@@ -90,13 +91,65 @@ class DiagGaussian(BaseDistribution):
         )
         return z, log_p
 
-    def log_prob(self, z):
+    def log_prob(self, z, context=None):
         if self.temperature is None:
             log_scale = self.log_scale
         else:
             log_scale = self.log_scale + np.log(self.temperature)
         log_p = -0.5 * self.d * np.log(2 * np.pi) - torch.sum(
             log_scale + 0.5 * torch.pow((z - self.loc) / torch.exp(log_scale), 2),
+            list(range(1, self.n_dim + 1)),
+        )
+        return log_p
+
+
+class ConditionalDiagGaussian(BaseDistribution):
+    """
+    Conditional multivariate Gaussian distribution with diagonal
+    covariance matrix, parameters are obtained by a context encoder,
+    context meaning the variable to condition on
+    """
+    def __init__(self, shape, context_encoder):
+        """Constructor
+
+        Args:
+          shape: Tuple with shape of data, if int shape has one dimension
+          context_encoder: Computes mean and log of the standard deviation
+          of the Gaussian, mean is the first half of the last dimension
+          of the encoder output, log of the standard deviation the second
+          half
+        """
+        super().__init__()
+        if isinstance(shape, int):
+            shape = (shape,)
+        if isinstance(shape, list):
+            shape = tuple(shape)
+        self.shape = shape
+        self.n_dim = len(shape)
+        self.d = np.prod(shape)
+        self.context_encoder = context_encoder
+
+    def forward(self, num_samples=1, context=None):
+        encoder_output = self.context_encoder(context)
+        split_ind = encoder_output.shape[-1] // 2
+        mean = encoder_output[..., :split_ind]
+        log_scale = encoder_output[..., split_ind:]
+        eps = torch.randn(
+            (num_samples,) + self.shape, dtype=mean.dtype, device=mean.device
+        )
+        z = mean + torch.exp(log_scale) * eps
+        log_p = -0.5 * self.d * np.log(2 * np.pi) - torch.sum(
+            log_scale + 0.5 * torch.pow(eps, 2), list(range(1, self.n_dim + 1))
+        )
+        return z, log_p
+
+    def log_prob(self, z, context=None):
+        encoder_output = self.context_encoder(context)
+        split_ind = encoder_output.shape[-1] // 2
+        mean = encoder_output[..., :split_ind]
+        log_scale = encoder_output[..., split_ind:]
+        log_p = -0.5 * self.d * np.log(2 * np.pi) - torch.sum(
+            log_scale + 0.5 * torch.pow((z - mean) / torch.exp(log_scale), 2),
             list(range(1, self.n_dim + 1)),
         )
         return log_p
@@ -126,7 +179,7 @@ class Uniform(BaseDistribution):
         self.high = torch.tensor(high)
         self.log_prob_val = -self.d * np.log(self.high - self.low)
 
-    def forward(self, num_samples=1):
+    def forward(self, num_samples=1, context=None):
         eps = torch.rand(
             (num_samples,) + self.shape, dtype=self.low.dtype, device=self.low.device
         )
@@ -134,7 +187,7 @@ class Uniform(BaseDistribution):
         log_p = self.log_prob_val * torch.ones(num_samples, device=self.low.device)
         return z, log_p
 
-    def log_prob(self, z):
+    def log_prob(self, z, context=None):
         log_p = self.log_prob_val * torch.ones(z.shape[0], device=z.device)
         out_range = torch.logical_or(z < self.low, z > self.high)
         ind_inf = torch.any(torch.reshape(out_range, (z.shape[0], -1)), dim=-1)
@@ -185,11 +238,11 @@ class UniformGaussian(BaseDistribution):
         else:
             self.register_buffer("scale", scale)
 
-    def forward(self, num_samples=1):
+    def forward(self, num_samples=1, context=None):
         z = self.sample(num_samples)
         return z, self.log_prob(z)
 
-    def sample(self, num_samples=1):
+    def sample(self, num_samples=1, context=None):
         eps_u = (
             torch.rand(
                 (num_samples, len(self.ind)),
@@ -207,7 +260,7 @@ class UniformGaussian(BaseDistribution):
         z = z[..., self.inv_perm]
         return self.scale * z
 
-    def log_prob(self, z):
+    def log_prob(self, z, context=None):
         log_p_u = torch.broadcast_to(-torch.log(self.scale[self.ind]), (len(z), -1))
         log_p_g = (
             -0.5 * np.log(2 * np.pi)
